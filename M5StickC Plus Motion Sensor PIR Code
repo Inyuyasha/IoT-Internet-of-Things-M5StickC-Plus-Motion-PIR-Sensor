@@ -1,0 +1,289 @@
+#define BLYNK_PRINT Serial  // Tells Blynk to send debug messages to the Serial Monitor
+
+/* Blynk Credentials */
+#define BLYNK_TEMPLATE_ID "TMPL2rbH6vQcj"
+#define BLYNK_TEMPLATE_NAME "Test for Blynk"
+#define BLYNK_AUTH_TOKEN "Mk3BTbww3OCmRGg3PBFgJQ141oaOnpCt"
+
+#include <M5StickCPlus.h>        // Controls the M5StickC Plus device (screen, buttons, etc.)
+#include <WiFi.h>                // Connects the ESP32 to WiFi
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>    // Connects the device to Blynk (a mobile app platform)
+
+
+
+/* WiFi Credentials */
+char ssid[] = "";       // Your WiFi name
+char pass[] = ""; // Your WiFi password
+
+/* Pin Definitions */
+#define LED_PIN 10       // The pin connected to an LED
+#define PIR_PIN 33       // The pin connected to the motion sensor (PIR)
+#define SPEAKER_PIN 25   // The pin connected to the speaker
+
+int prevState = LOW;                 // Keeps track of the last motion state
+unsigned long lastMotionTime = 0;   // Time when motion was last detected
+unsigned long cooldown = 3000;      // Minimum delay (in milliseconds) between sound alerts
+
+/* ---------- NEW: Battery Icon Drawing Function ---------- */
+void drawBatteryIcon(){
+  float voltage = M5.Axp.GetBatVoltage(); // e.g., 3.7v
+  int level = map((int)(voltage * 100), 330, 420, 0, 100); // Map 3.3V-4.2V to 0-100%
+  level = constrain(level, 0, 100); // Clamp between 0-100
+
+  // Position and Size
+  int x = 5, y = 110, w = 30, h = 12;
+
+  // Clear previous icon area
+  M5.Lcd.fillRect(x - 1, y - 1, w + 30, h + 4, BLACK);
+
+  // Battery outline and nub
+  M5.Lcd.drawRect(x, y, w, h, WHITE);
+  M5.Lcd.fillRect(x + w, y + 3, 2, h - 6, WHITE); // Battery nub
+
+  // Fill level (red if < 20%, else green)
+  int fillWidth = map(level, 0, 100, 0, w - 2);
+  M5.Lcd.fillRect(x + 1, y + 1, fillWidth, 5 - 2, level < 20 ? RED : GREEN);
+
+  // Optional: text%
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.setCursor(x + 35, y + 2);
+  M5.Lcd.printf("%d%%", level);
+}
+
+
+/* ---------- SCARY BEEP PATTERNS ---------- */
+
+// Each of the following functions plays a different "scary" sound pattern on the speaker
+
+void pattern1_shortTriple() {
+  // Plays 3 short beeps
+  ledcAttachPin(SPEAKER_PIN, 0);
+  ledcSetup(0, 2000, 8);
+  for (int i = 0; i < 3; i++) {
+    ledcWrite(0, 225); delay(150);
+    ledcWrite(0, 0);   delay(100);
+  }
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void pattern2_risingTone() {
+  // Beep increases in pitch like a rising alarm
+  ledcAttachPin(SPEAKER_PIN, 0);
+  for (int f = 1000; f <= 3000; f += 500) {
+    ledcSetup(0, f, 8);
+    ledcWrite(0, 225); delay(200);
+    ledcWrite(0, 0);   delay(100);
+  }
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void pattern3_longThenShorts() {
+  // Plays one long beep followed by two short ones
+  ledcAttachPin(SPEAKER_PIN, 0);
+  ledcSetup(0, 1500, 8);
+  ledcWrite(0, 225); delay(500);
+  ledcWrite(0, 0);   delay(200);
+  for (int i = 0; i < 2; i++) {
+    ledcWrite(0, 225); delay(200);
+    ledcWrite(0, 0);   delay(100);
+  }
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void pattern4_fastBurst() {
+  // Quick series of short beeps
+  ledcAttachPin(SPEAKER_PIN, 0);
+  ledcSetup(0, 2500, 8);
+  for (int i = 0; i < 5; i++) {
+    ledcWrite(0, 225); delay(75);
+    ledcWrite(0, 0);   delay(50);
+  }
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void pattern5_scaryDoubleTone() {
+  // Plays two beeps with very different pitches
+  ledcAttachPin(SPEAKER_PIN, 0);
+  ledcSetup(0, 400, 8);
+  ledcWrite(0, 225); delay(300);
+  ledcWrite(0, 0);   delay(100);
+  ledcSetup(0, 3000, 8);
+  ledcWrite(0, 225); delay(200);
+  ledcWrite(0, 0);
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void pattern6_creepyPulse() {
+  // A slow, pulsing creepy beep that gets faster
+  ledcAttachPin(SPEAKER_PIN, 0);
+  int freq = 80;
+  for (int i = 0; i < 6; i++) {
+    ledcSetup(0, freq, 8);
+    ledcWrite(0, 225);
+    delay(250 - i * 30);
+    ledcWrite(0, 0);
+    delay(120 - i * 15);
+  }
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void pattern7_sirenOfDoom() {
+  // Siren-like sound going up and down in pitch
+  ledcAttachPin(SPEAKER_PIN, 0);
+  for (int i = 1000; i <= 2000; i += 100) {
+    ledcSetup(0, i, 8);
+    ledcWrite(0, 225);
+    delay(40);
+  }
+  for (int i = 2000; i >= 1000; i -= 100) {
+    ledcSetup(0, i, 8);
+    ledcWrite(0, 225);
+    delay(40);
+  }
+  ledcWrite(0, 0);
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void pattern8_psychoFlicker() {
+  // Random quick flickers that sound unsettling
+  ledcAttachPin(SPEAKER_PIN, 0);
+  ledcSetup(0, 1500, 8);
+  int delays[] = {90, 40, 120, 70, 200, 50};
+  for (int i = 0; i < 6; i++) {
+    ledcWrite(0, 225);
+    delay(delays[i]);
+    ledcWrite(0, 0);
+    delay(30);
+  }
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void playRandomBeepPattern() {
+  // Picks and plays one of the 8 scary beep patterns at random
+  int pattern = random(1, 9);  // Picks a number from 1 to 8
+  Serial.print("Playing Pattern #");
+  Serial.println(pattern);
+  switch (pattern) {
+    case 1: pattern1_shortTriple(); break;
+    case 2: pattern2_risingTone(); break;
+    case 3: pattern3_longThenShorts(); break;
+    case 4: pattern4_fastBurst(); break;
+    case 5: pattern5_scaryDoubleTone(); break;
+    case 6: pattern6_creepyPulse(); break;
+    case 7: pattern7_sirenOfDoom(); break;
+    case 8: pattern8_psychoFlicker(); break;
+  }
+}
+
+/* ---------- BLYNK VIRTUAL BUTTON HANDLER ---------- */
+
+BLYNK_WRITE(V0) {
+  // This gets triggered when you press a virtual button in the Blynk app
+  int ledState = param.asInt();      // Get 0 or 1 from app (OFF or ON)
+  digitalWrite(LED_PIN, ledState);   // Turn LED on or off
+  Serial.print("LED State: ");
+  Serial.println(ledState);
+}
+
+/* ---------- HELPER FUNCTIONS ---------- */
+
+void connectWiFi() {
+  // Tries to connect the ESP32 to WiFi
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, pass);
+  int attempt = 0;
+  while (WiFi.status() != WL_CONNECTED && attempt < 30) {
+    delay(500);
+    Serial.print(".");
+    attempt++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi Connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nFailed to connect to WiFi. Restarting ESP32...");
+    ESP.restart();
+  }
+}
+
+void initM5Display() {
+  // Sets up the screen on the M5StickC Plus
+  M5.begin();
+  M5.Lcd.setRotation(3);
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.setTextSize(4);
+}
+
+void connectBlynk() {
+  // Connects to the Blynk cloud service
+  Serial.println("Connecting to Blynk...");
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass, "blynk.cloud", 80);
+  Serial.println("Blynk connection attempt complete.");
+}
+
+/* ---------- MAIN SETUP (runs once) ---------- */
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\nStarting ESP32...");
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);  // Make sure LED starts OFF
+  pinMode(PIR_PIN, INPUT);     // Set motion sensor pin as input
+
+  connectWiFi();               // Connect to your WiFi
+  connectBlynk();              // Connect to Blynk cloud
+  initM5Display();             // Start the screen
+
+  randomSeed(analogRead(0));   // Set up random pattern generator
+}
+
+/* ---------- MAIN LOOP (runs over and over) ---------- */
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    // If WiFi gets disconnected, try reconnecting
+    Serial.println("WiFi Disconnected! Reconnecting...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, pass);
+  }
+
+  Blynk.run();  // Keeps the connection to Blynk active
+
+  int motionState = digitalRead(PIR_PIN);  // Read motion sensor
+
+  if (motionState != prevState) {
+    M5.Lcd.setTextSize(4); // Reset to large text
+    // If motion state changed (from no-motion to motion or vice versa):
+    M5.Lcd.fillScreen(motionState == HIGH ? RED : BLACK);  // Change screen color
+    M5.Lcd.setCursor(20, 40);
+    M5.Lcd.println(motionState == HIGH ? "Motion:1" : "Motion:0");
+
+    Serial.print("Sending to Blynk: ");
+    Serial.println(motionState);
+
+    Blynk.virtualWrite(V1, motionState);  // Send motion status to app
+
+    // If motion detected and enough time has passed:
+    if (motionState == HIGH && millis() - lastMotionTime > cooldown) {
+      playRandomBeepPattern();  // 🔊 Play one scary sound
+      lastMotionTime = millis();
+    }
+
+    prevState = motionState;  // Update previous state
+  }
+
+
+  static unsigned long lastBatteryDraw = 0;
+  if(millis() - lastBatteryDraw > 5000) {
+    drawBatteryIcon();
+    lastBatteryDraw = millis();
+  }
+
+  delay(100);  // Pause briefly before repeating loop
+}
